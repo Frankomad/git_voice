@@ -92,30 +92,33 @@ def ulaw_to_pcm16(ulaw_audio: bytes) -> bytes:
 
 
 def pcm16_to_ulaw(pcm16_audio: bytes) -> bytes:
-    """Convert 16-bit PCM audio to μ-law"""
+    """Convert 16-bit PCM audio to μ-law using ITU-T G.711"""
     # Convert bytes to numpy array of int16
     pcm_array = np.frombuffer(pcm16_audio, dtype=np.int16)
     
-    # μ-law compression
+    # μ-law compression (ITU-T G.711)
     # Get sign and magnitude
     sign = np.sign(pcm_array)
     magnitude = np.abs(pcm_array)
     
-    # Clip to maximum value
+    # Clip to maximum value for μ-law (32767)
     magnitude = np.clip(magnitude, 0, 32767)
     
-    # Add bias
+    # Add bias (required for μ-law encoding)
     magnitude = magnitude + 33
     
-    # Find exponent (bit position of most significant bit)
-    # For simplicity, use log2 approach
-    exponent = np.floor(np.log2(magnitude + 1)).astype(np.int16)
+    # Find exponent using a safer approach that avoids log2(0)
+    # For values > 0, use log2; for 0, use 0
+    exponent = np.zeros_like(magnitude, dtype=np.int16)
+    mask = magnitude > 0
+    exponent[mask] = np.floor(np.log2(magnitude[mask])).astype(np.int16)
     exponent = np.clip(exponent, 0, 7)
     
     # Calculate mantissa
     mantissa = (magnitude >> (exponent + 1)) & 0x0F
     
     # Combine: sign bit (bit 7) | exponent (bits 6-4) | mantissa (bits 3-0)
+    # μ-law encoding: complement and invert
     ulaw_values = (127 - (exponent << 4) - mantissa)
     ulaw_values[sign < 0] |= 0x80  # Set sign bit
     
@@ -165,6 +168,8 @@ class TwilioOpenAIBridge:
         self.audio_buffer = bytearray()
         self.sequence_number = 0  # Track sequence number for media messages
         self.stream_sid = None  # Store the actual stream SID
+        self.last_timestamp = 0  # Track last timestamp from incoming messages
+        self.timestamp_base = None  # Base timestamp when stream starts
         
     async def connect_to_openai(self):
         """Connect to OpenAI Realtime API"""
@@ -262,17 +267,32 @@ class TwilioOpenAIBridge:
             # Increment sequence number for each media message
             self.sequence_number += 1
             
-            # Send to Twilio Media Stream with sequence number
+            # Calculate timestamp for this media chunk
+            # Each 160-byte chunk at 8kHz = 20ms of audio
+            # Timestamp increments by ~20ms per chunk
+            chunk_duration_ms = len(ulaw_audio) * 1000 // TWILIO_SAMPLE_RATE  # ms
+            if self.timestamp_base is not None:
+                # Use last timestamp + chunk duration, starting from where we left off
+                current_timestamp = self.last_timestamp + chunk_duration_ms
+            else:
+                # Fallback: generate timestamp based on sequence number
+                current_timestamp = self.sequence_number * 20  # ~20ms per chunk
+            
+            # Send to Twilio Media Stream with sequence number and timestamp
             # Note: "track" field is NOT valid for Media Stream messages to Twilio
             # The track information is only in messages FROM Twilio
             message = {
                 "event": "media",
                 "streamSid": stream_id,
                 "media": {
-                    "payload": audio_b64
+                    "payload": audio_b64,
+                    "timestamp": str(current_timestamp)
                 },
                 "sequenceNumber": str(self.sequence_number)
             }
+            
+            # Update last timestamp for next chunk
+            self.last_timestamp = current_timestamp
             # Log the message structure for debugging (first few messages only)
             # if self.sequence_number <= 3:
             #     print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
@@ -439,7 +459,17 @@ class TwilioOpenAIBridge:
                         media = data.get("media", {})
                         payload = media.get("payload", "")
                         track = media.get("track", "inbound")  # Usually "inbound" for user's voice
+                        timestamp = media.get("timestamp", "")
                         
+                        # Track timestamp for outgoing audio sync
+                        if timestamp:
+                            try:
+                                ts = int(timestamp)
+                                if self.timestamp_base is None:
+                                    self.timestamp_base = ts
+                                self.last_timestamp = ts
+                            except (ValueError, TypeError):
+                                pass
                         
                         if payload:
                             try:
