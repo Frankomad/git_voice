@@ -44,7 +44,9 @@ class RealtimeAssistant:
         self.session_configured = False
         self.audio_input_queue = asyncio.Queue()
         self.audio_output_queue = asyncio.Queue()
-        self.qa_data = self.load_qa_data(qa_file)
+        # COMMENTED OUT: Knowledge base loading to save tokens during debugging
+        # self.qa_data = self.load_qa_data(qa_file)
+        self.qa_data = {}  # Empty dict to avoid errors
         
         # Speech rate configuration (0.25 to 4.0, default 1.0)
         # Can be set via environment variable or parameter
@@ -77,59 +79,18 @@ class RealtimeAssistant:
             return {}
     
     def build_system_prompt(self) -> str:
-        """Build minimal system prompt focused ONLY on Croatian language"""
+        """Build MINIMAL system prompt - NO knowledge base to save tokens during debugging"""
         
-        qa = self.qa_data
-        company_name = qa.get('company', 'Moove On')
-        greeting = qa.get('greeting', 'Dobar dan, dobili ste MooveOn asistenta.')
-        description = qa.get('description', '')
-        faq_list = qa.get('faq', [])
-        key_info = qa.get('key_information', {})
+        # COMMENTED OUT: All knowledge base content to save tokens
+        # qa = self.qa_data
+        # company_name = qa.get('company', 'Moove On')
+        # greeting = qa.get('greeting', 'Dobar dan, dobili ste MooveOn asistenta.')
+        # description = qa.get('description', '')
+        # faq_list = qa.get('faq', [])
+        # key_info = qa.get('key_information', {})
         
-        # Build FAQ section
-        faq_section = ""
-        if faq_list:
-            faq_section = "\n\nFREQUENTLY ASKED QUESTIONS:\n"
-            for item in faq_list:
-                faq_section += f"- Q: {item.get('pitanje', '')}\n"
-                faq_section += f"  A: {item.get('odgovor', '')}\n"
-        
-        # Build key information section
-        key_info_section = ""
-        if key_info:
-            key_info_section = "\n\nKEY INFORMATION:\n"
-            for key, value in key_info.items():
-                key_info_section += f"- {key.replace('_', ' ').title()}: {value}\n"
-        
-        # Select general questions to suggest when user asks unrelated questions
-        general_questions = []
-        if faq_list:
-            # Find some general/interesting questions
-            for item in faq_list:
-                q = item.get('pitanje', '')
-                # Select general questions that might interest most users
-                if any(keyword in q.lower() for keyword in ['čime se bavi', 'kako ugovorit', 'tko sve može', 'koje marke', 'što je moove']):
-                    general_questions.append(q)
-                # Limit to 3-4 general questions
-                if len(general_questions) >= 4:
-                    break
-        
-        # If no specific general questions found, use first few
-        if not general_questions and faq_list:
-            general_questions = [item.get('pitanje', '') for item in faq_list[:3]]
-        
-        general_questions_text = ""
-        if general_questions:
-            general_questions_text = "\n\nGENERAL QUESTIONS TO SUGGEST (use when user asks unrelated questions):\n"
-            for i, q in enumerate(general_questions, 1):
-                general_questions_text += f"- {q}\n"
-        
-        # Ultra minimal prompt - Written in English so model clearly understands
-        system_prompt = f"""You are a {company_name} assistant. You MUST speak ONLY in Croatian language (Hrvatski jezik). Croatian is your ONLY allowed language.
-
-COMPANY INFORMATION:
-- Company: {company_name}
-- Description: {description}
+        # MINIMAL PROMPT: Only language rules, no knowledge base
+        system_prompt = """You are a friendly assistant. You MUST speak ONLY in Croatian language (Hrvatski jezik). Croatian is your ONLY allowed language.
 
 CRITICAL LANGUAGE RULES:
 - You are FORBIDDEN to speak in any other language. You MUST speak ONLY Croatian.
@@ -138,33 +99,13 @@ CRITICAL LANGUAGE RULES:
 - Before responding, verify: "Am I speaking Croatian?" If the answer is no, do not respond.
 
 FIRST CONTACT:
-- When the conversation starts, you MUST introduce yourself with this greeting: "{greeting}"
-- Always greet the user first with this exact phrase or similar variations in Croatian.
-
-{key_info_section}
-
-{faq_section}
-
-{general_questions_text}
+- When the conversation starts, greet the user in Croatian.
+- Example greeting: "Dobar dan! Kako vam mogu pomoći?"
 
 HOW TO RESPOND:
-- When user asks a question, find the matching Q&A from the FAQ list above and provide the answer in Croatian.
-- If you find a similar question in FAQ, use that answer.
 - Always respond in Croatian language only.
-- Provide accurate information based on the FAQ above.
-
-CRITICAL: HANDLING UNRELATED QUESTIONS:
-- If the user asks a question that is NOT related to {company_name}, Moove On services, vehicle rental, leasing, or any topic in the FAQ list above, you MUST respond with:
-  "Nažalost vam ne mogu dati odgovor na to pitanje. Zanima li vas možda [suggest one general question from the GENERAL QUESTIONS list above]?"
-- Always suggest ONE relevant general question from the GENERAL QUESTIONS list when responding to unrelated questions.
-- The suggested question should be relevant and interesting for most users.
-- Use your judgment to pick the most appropriate general question based on the context.
-
-Example responses in Croatian:
-- First greeting: "{greeting}"
-- If asked about the company: "{faq_list[0].get('odgovor', '') if faq_list else description}"
-- If asked how to request an offer: Use the answer from FAQ about requesting an offer.
-- If asked unrelated question (e.g., "What's the weather?"): "Nažalost vam ne mogu dati odgovor na to pitanje. Zanima li vas možda {general_questions[0] if general_questions else 'Čime se bavi Moove On?'}?"
+- Be helpful and friendly.
+- If you don't know something, say so politely in Croatian.
 
 Remember: Your ONLY language is Croatian. No exceptions."""
         
