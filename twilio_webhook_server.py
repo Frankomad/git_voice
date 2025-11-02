@@ -4,6 +4,10 @@ Twilio Webhook Server for AI Agent
 Handles incoming SIP calls from Twilio and bridges them to OpenAI Realtime API
 """
 
+# Monkey patch must be done before importing any other modules
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, request, Response
 from flask_sock import Sock
 from twilio.twiml.voice_response import VoiceResponse
