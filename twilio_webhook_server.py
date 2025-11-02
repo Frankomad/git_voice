@@ -338,9 +338,11 @@ class TwilioOpenAIBridge:
                     elif event_type == "response.audio.delta":
                         # Accumulate audio chunks
                         audio_chunk = data.get("delta", "")
+                        print(f"[{self.call_sid}] Received response.audio.delta (chunk length: {len(audio_chunk) if audio_chunk else 0})", flush=True)
                         if audio_chunk:
                             try:
                                 audio_data = base64.b64decode(audio_chunk)
+                                print(f"[{self.call_sid}] Decoded {len(audio_data)} bytes of audio from OpenAI", flush=True)
                                 self.audio_buffer.extend(audio_data)
                                 # Send audio in smaller chunks for better real-time playback
                                 # 24kHz = 24000 samples/sec, 16-bit = 2 bytes/sample
@@ -348,9 +350,13 @@ class TwilioOpenAIBridge:
                                 if len(self.audio_buffer) >= 960:
                                     await self.send_audio_to_twilio(bytes(self.audio_buffer))
                                     self.audio_buffer.clear()
-                                    print(f"[{self.call_sid}] Sent audio chunk to Twilio", flush=True)
+                                    print(f"[{self.call_sid}] ✓ Sent audio chunk to Twilio", flush=True)
                             except Exception as e:
                                 print(f"[{self.call_sid}] Error decoding audio: {e}", flush=True)
+                                import traceback
+                                traceback.print_exc()
+                        else:
+                            print(f"[{self.call_sid}] response.audio.delta with empty chunk!", flush=True)
                     
                     elif event_type == "response.audio.done":
                         # Send any remaining accumulated audio to Twilio
@@ -358,6 +364,11 @@ class TwilioOpenAIBridge:
                             await self.send_audio_to_twilio(bytes(self.audio_buffer))
                             self.audio_buffer.clear()
                             print(f"[{self.call_sid}] Sent final audio chunk to Twilio", flush=True)
+                    
+                    elif event_type == "response.audio_transcript.delta":
+                        # These events are very frequent, only log occasionally
+                        if openai_message_count % 100 == 0:
+                            print(f"[{self.call_sid}] Received response.audio_transcript.delta (message #{openai_message_count})", flush=True)
                     
                     elif event_type == "response.audio_transcript.done":
                         # Log when audio transcript is done
@@ -376,10 +387,9 @@ class TwilioOpenAIBridge:
                     
                     else:
                         # Log unhandled events for debugging
-                        if openai_message_count <= 20:
+                        if openai_message_count <= 50:
                             print(f"[{self.call_sid}] Unhandled OpenAI event: {event_type}", flush=True)
-                            if event_type not in ["response.audio_transcript.delta", "response.audio.delta"]:
-                                print(f"[{self.call_sid}] Event data: {json.dumps(data, indent=2)}", flush=True)
+                            print(f"[{self.call_sid}] Event data: {json.dumps(data, indent=2)}", flush=True)
                         
                 except json.JSONDecodeError:
                     print(f"[{self.call_sid}] Received non-JSON message from OpenAI: {message[:200]}", flush=True)
