@@ -387,13 +387,13 @@ class TwilioOpenAIBridge:
                             await self.assistant.configure_session()
                             self.assistant.session_configured = True
                             
-                            # Trigger the AI to speak the greeting
+                            # Trigger the AI to speak the greeting (minimal to save tokens)
                             try:
                                 response_event = {
                                     "type": "response.create",
                                     "response": {
                                         "modalities": ["audio", "text"],
-                                        "instructions": "Greet the caller in Croatian language ONLY. Say exactly this greeting in Croatian: 'Dobar dan, dobili ste MooveOn asistenta. Kako vam mogu pomoći?' You MUST speak ONLY Croatian, never Spanish, English, or any other language."
+                                        "instructions": "Greet the caller in Croatian language ONLY. Say: 'Dobar dan! Kako vam mogu pomoći?'"
                                     }
                                 }
                                 await self.openai_ws.send(json.dumps(response_event))
