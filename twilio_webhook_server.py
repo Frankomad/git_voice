@@ -447,7 +447,6 @@ class TwilioOpenAIBridge:
                                 ulaw_audio = base64.b64decode(payload)
                                 # Send to OpenAI
                                 await self.send_audio_to_openai(ulaw_audio)
-                                print(f"[{self.call_sid}] Sent {len(ulaw_audio)} bytes of audio to OpenAI (track: {track})", flush=True)
                             except Exception as e:
                                 print(f"[{self.call_sid}] Error processing Twilio audio: {e}", flush=True)
                                 import traceback
