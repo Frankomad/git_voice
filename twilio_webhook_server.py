@@ -98,8 +98,8 @@ def pcm16_to_ulaw(pcm16_audio: bytes) -> bytes:
     
     # μ-law compression (ITU-T G.711)
     # Get sign and magnitude
-    sign = np.sign(pcm_array)
-    magnitude = np.abs(pcm_array)
+    sign_mask = pcm_array < 0
+    magnitude = np.abs(pcm_array).astype(np.uint16)
     
     # Clip to maximum value for μ-law (32767)
     magnitude = np.clip(magnitude, 0, 32767)
@@ -107,22 +107,31 @@ def pcm16_to_ulaw(pcm16_audio: bytes) -> bytes:
     # Add bias (required for μ-law encoding)
     magnitude = magnitude + 33
     
-    # Find exponent using a safer approach that avoids log2(0)
-    # For values > 0, use log2; for 0, use 0
-    exponent = np.zeros_like(magnitude, dtype=np.int16)
-    mask = magnitude > 0
-    exponent[mask] = np.floor(np.log2(magnitude[mask])).astype(np.int16)
-    exponent = np.clip(exponent, 0, 7)
+    # Find exponent (0-7) - bit position of most significant bit
+    # Use bit operations to find the highest set bit
+    exponent = np.zeros(magnitude.shape, dtype=np.uint8)
+    # Find the bit position by checking each bit from high to low
+    for bit_pos in range(13, -1, -1):  # Check bits 13 down to 0 (for values up to 32767+33)
+        mask = (magnitude >> bit_pos) >= 1
+        # Convert bit position to exponent (0-7) based on μ-law encoding
+        # For μ-law: exp = (bit_pos - 4) clamped to 0-7
+        if bit_pos >= 5:
+            exp_val = min(7, bit_pos - 4)
+            exponent[mask & (exponent == 0)] = exp_val
     
-    # Calculate mantissa
-    mantissa = (magnitude >> (exponent + 1)) & 0x0F
+    # Calculate mantissa (4 bits)
+    # Shift right by (exponent + 1), then mask to 4 bits
+    mantissa = ((magnitude >> (exponent + 1)) & 0x0F).astype(np.uint8)
     
-    # Combine: sign bit (bit 7) | exponent (bits 6-4) | mantissa (bits 3-0)
-    # μ-law encoding: complement and invert
-    ulaw_values = (127 - (exponent << 4) - mantissa)
-    ulaw_values[sign < 0] |= 0x80  # Set sign bit
+    # μ-law encoding: combine exponent and mantissa, then complement
+    # Format: [sign][exponent 3 bits][mantissa 4 bits]
+    # Encoding: (127 - (exponent << 4) - mantissa)
+    ulaw_values = (127 - (exponent << 4) - mantissa).astype(np.uint8)
     
-    return ulaw_values.astype(np.uint8).tobytes()
+    # Set sign bit (bit 7) for negative values
+    ulaw_values[sign_mask] |= 0x80
+    
+    return ulaw_values.tobytes()
 
 
 def resample_audio(audio_data: bytes, from_rate: int, to_rate: int) -> bytes:
@@ -278,15 +287,15 @@ class TwilioOpenAIBridge:
                 # Fallback: generate timestamp based on sequence number
                 current_timestamp = self.sequence_number * 20  # ~20ms per chunk
             
-            # Send to Twilio Media Stream with sequence number and timestamp
-            # Note: "track" field is NOT valid for Media Stream messages to Twilio
-            # The track information is only in messages FROM Twilio
+            # Send to Twilio Media Stream with sequence number, timestamp, and track
+            # For outbound audio (AI speaking), use "outbound" track
             message = {
                 "event": "media",
                 "streamSid": stream_id,
                 "media": {
                     "payload": audio_b64,
-                    "timestamp": str(current_timestamp)
+                    "timestamp": str(current_timestamp),
+                    "track": "outbound"  # Required for outbound audio
                 },
                 "sequenceNumber": str(self.sequence_number)
             }
