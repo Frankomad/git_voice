@@ -741,16 +741,32 @@ def media_websocket(ws):
             bridge = TwilioOpenAIBridge(wrapped_ws, call_sid)
             await bridge.run()
         
-        # Run async handler with the event loop
-        try:
-            loop.run_until_complete(handle_async())
-        finally:
-            # Clean up the loop
+        # Run async handler in a thread to avoid blocking eventlet's main loop
+        import threading
+        
+        def run_async_in_thread():
             try:
-                if not loop.is_closed():
-                    loop.close()
-            except:
-                pass
+                # Set the event loop for this thread
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(handle_async())
+            except Exception as e:
+                print(f"[{call_sid}] Error in async handler thread: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Clean up the loop
+                try:
+                    if not loop.is_closed():
+                        loop.close()
+                except:
+                    pass
+        
+        # Start the async handler in a thread
+        thread = threading.Thread(target=run_async_in_thread, daemon=True)
+        thread.start()
+        
+        # Wait for thread to complete (blocking, but this is OK in Flask-Sock handler)
+        thread.join()
         
     except Exception as e:
         print(f"[{call_sid}] WebSocket error: {e}")
