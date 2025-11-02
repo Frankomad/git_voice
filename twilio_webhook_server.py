@@ -287,15 +287,17 @@ class TwilioOpenAIBridge:
                 # Fallback: generate timestamp based on sequence number
                 current_timestamp = self.sequence_number * 20  # ~20ms per chunk
             
-            # Send to Twilio Media Stream with sequence number, timestamp, and track
-            # For outbound audio (AI speaking), use "outbound" track
+            # Send to Twilio Media Stream - match Twilio's incoming message format exactly
+            # Twilio sends: event, streamSid, media.payload, media.timestamp, media.track, media.chunk, sequenceNumber
+            # For outbound audio, we need to match this structure
             message = {
                 "event": "media",
                 "streamSid": stream_id,
                 "media": {
                     "payload": audio_b64,
                     "timestamp": str(current_timestamp),
-                    "track": "outbound"  # Required for outbound audio
+                    "track": "outbound",  # Must specify outbound track for bidirectional streams
+                    "chunk": str(self.sequence_number)  # Include chunk number to match Twilio's format
                 },
                 "sequenceNumber": str(self.sequence_number)
             }
@@ -303,22 +305,28 @@ class TwilioOpenAIBridge:
             # Update last timestamp for next chunk
             self.last_timestamp = current_timestamp
             
+            # Convert to JSON for sending
+            message_json = json.dumps(message)
+            
             # Log detailed message structure for debugging (first few and periodically)
             if self.sequence_number <= 5 or self.sequence_number % 50 == 0:
                 print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
                 print(f"  - streamSid: {stream_id}", flush=True)
                 print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
                 print(f"  - timestamp: {current_timestamp}", flush=True)
+                print(f"  - track: {message['media'].get('track', 'MISSING!')}", flush=True)
                 print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
                 print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
                 print(f"  - chunk duration: {chunk_duration_ms}ms", flush=True)
                 # Validate ulaw audio format (should be 8-bit values 0-255)
                 ulaw_array = np.frombuffer(ulaw_audio, dtype=np.uint8)
                 print(f"  - ulaw range: {ulaw_array.min()} to {ulaw_array.max()}", flush=True)
+                # Show actual message structure (first 3 only to avoid spam)
+                if self.sequence_number <= 3:
+                    print(f"[{self.call_sid}] Full message JSON: {message_json[:600]}", flush=True)
             
             # Send message to Twilio
             try:
-                message_json = json.dumps(message)
                 # Verify message structure before sending
                 if not stream_id:
                     print(f"[{self.call_sid}] WARNING: No streamSid available! Using call_sid: {self.call_sid}", flush=True)
