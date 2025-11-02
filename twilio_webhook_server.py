@@ -293,17 +293,46 @@ class TwilioOpenAIBridge:
             
             # Update last timestamp for next chunk
             self.last_timestamp = current_timestamp
-            # Log the message structure for debugging (first few messages only)
-            # if self.sequence_number <= 3:
-            #     print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
-            #     print(f"  - streamSid: {stream_id}", flush=True)
-            #     print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
-            #     print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
-            #     print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
-            #     print(f"  - message JSON (first 200 chars): {json.dumps(message)[:200]}", flush=True)
             
-            await self.twilio_ws.send(json.dumps(message))
-            print(f"[{self.call_sid}] ✓ Sent {len(ulaw_audio)} bytes of audio to Twilio (seq: {self.sequence_number})", flush=True)
+            # Log detailed message structure for debugging (first few and periodically)
+            if self.sequence_number <= 5 or self.sequence_number % 50 == 0:
+                print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
+                print(f"  - streamSid: {stream_id}", flush=True)
+                print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
+                print(f"  - timestamp: {current_timestamp}", flush=True)
+                print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
+                print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
+                print(f"  - chunk duration: {chunk_duration_ms}ms", flush=True)
+                # Validate ulaw audio format (should be 8-bit values 0-255)
+                ulaw_array = np.frombuffer(ulaw_audio, dtype=np.uint8)
+                print(f"  - ulaw range: {ulaw_array.min()} to {ulaw_array.max()}", flush=True)
+            
+            # Send message to Twilio
+            try:
+                message_json = json.dumps(message)
+                # Verify message structure before sending
+                if not stream_id:
+                    print(f"[{self.call_sid}] WARNING: No streamSid available! Using call_sid: {self.call_sid}", flush=True)
+                
+                # Send to WebSocket
+                await self.twilio_ws.send(message_json)
+                
+                # Log successful send (reduced frequency after first few)
+                if self.sequence_number <= 10 or self.sequence_number % 50 == 0:
+                    print(f"[{self.call_sid}] ✓ Sent {len(ulaw_audio)} bytes of audio to Twilio (seq: {self.sequence_number}, ts: {current_timestamp})", flush=True)
+                    
+            except Exception as send_error:
+                print(f"[{self.call_sid}] ERROR sending WebSocket message: {send_error}", flush=True)
+                print(f"[{self.call_sid}] Error type: {type(send_error).__name__}", flush=True)
+                print(f"[{self.call_sid}] Message structure:", flush=True)
+                print(f"  - streamSid: {stream_id}", flush=True)
+                print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
+                print(f"  - timestamp: {current_timestamp}", flush=True)
+                print(f"  - payload length: {len(audio_b64)}", flush=True)
+                print(f"[{self.call_sid}] Full message: {message_json[:500]}", flush=True)
+                import traceback
+                traceback.print_exc()
+                raise
             
         except Exception as e:
             print(f"[{self.call_sid}] Error sending audio to Twilio: {e}", flush=True)
@@ -460,6 +489,16 @@ class TwilioOpenAIBridge:
                         payload = media.get("payload", "")
                         track = media.get("track", "inbound")  # Usually "inbound" for user's voice
                         timestamp = media.get("timestamp", "")
+                        sequence = data.get("sequenceNumber", "")
+                        
+                        # Log incoming message structure for comparison (first few only)
+                        if message_count <= 5:
+                            print(f"[{self.call_sid}] DEBUG: Received media FROM Twilio:", flush=True)
+                            print(f"  - streamSid: {data.get('streamSid', 'N/A')}", flush=True)
+                            print(f"  - sequenceNumber: {sequence}", flush=True)
+                            print(f"  - timestamp: {timestamp}", flush=True)
+                            print(f"  - track: {track}", flush=True)
+                            print(f"  - payload length: {len(payload) if payload else 0} chars (base64)", flush=True)
                         
                         # Track timestamp for outgoing audio sync
                         if timestamp:
@@ -467,6 +506,7 @@ class TwilioOpenAIBridge:
                                 ts = int(timestamp)
                                 if self.timestamp_base is None:
                                     self.timestamp_base = ts
+                                    print(f"[{self.call_sid}] Set timestamp base: {ts}", flush=True)
                                 self.last_timestamp = ts
                             except (ValueError, TypeError):
                                 pass
@@ -874,6 +914,42 @@ def status_webhook():
     print(f"    Status: {call_status}")
     
     return '', 200
+
+
+@app.route('/test-audio', methods=['GET', 'POST'])
+def test_audio():
+    """Test endpoint to verify audio conversion is working"""
+    import base64
+    
+    # Generate a test tone (1kHz sine wave, 100ms at 8kHz)
+    import math
+    sample_rate = 8000
+    duration_ms = 100
+    frequency = 1000  # 1kHz tone
+    
+    samples = int(sample_rate * duration_ms / 1000)
+    test_pcm = bytearray()
+    for i in range(samples):
+        sample = int(32767 * 0.5 * math.sin(2 * math.pi * frequency * i / sample_rate))
+        test_pcm.extend(struct.pack('<h', sample))
+    
+    # Convert to μ-law
+    test_ulaw = pcm16_to_ulaw(bytes(test_pcm))
+    test_b64 = base64.b64encode(test_ulaw).decode('utf-8')
+    
+    # Validate μ-law range
+    ulaw_array = np.frombuffer(test_ulaw, dtype=np.uint8)
+    
+    return {
+        "status": "ok",
+        "test": {
+            "pcm_samples": len(test_pcm) // 2,
+            "ulaw_bytes": len(test_ulaw),
+            "ulaw_range": f"{ulaw_array.min()} to {ulaw_array.max()}",
+            "base64_length": len(test_b64),
+            "conversion_valid": ulaw_array.min() >= 0 and ulaw_array.max() <= 255
+        }
+    }
 
 
 # WebSocket server is now handled by Flask-Sock on the same port as Flask
