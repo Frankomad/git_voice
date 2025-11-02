@@ -38,25 +38,55 @@ BASE_URL = os.getenv("BASE_URL") or os.getenv("RENDER_URL") or NGROK_URL  # Base
 TWILIO_SAMPLE_RATE = 8000  # Twilio uses 8kHz μ-law
 OPENAI_SAMPLE_RATE = 24000  # OpenAI Realtime API uses 24kHz PCM16
 
+# Build μ-law to PCM16 lookup table once (ITU-T G.711 standard)
+_ULAW_TO_PCM_TABLE = None
+
+def _build_ulaw_table():
+    """Build μ-law to PCM16 lookup table (called once)"""
+    global _ULAW_TO_PCM_TABLE
+    if _ULAW_TO_PCM_TABLE is not None:
+        return _ULAW_TO_PCM_TABLE
+    
+    table = np.zeros(256, dtype=np.int16)
+    for i in range(256):
+        # Complement all bits (μ-law encoding complements bits)
+        complemented = (~i) & 0xFF
+        
+        # Extract sign bit (bit 7 after complement: 0 = positive, 1 = negative)
+        sign_bit = (complemented >> 7) & 0x01
+        
+        # Extract exponent (bits 6-4 after complement)
+        exponent = (complemented >> 4) & 0x07
+        
+        # Extract mantissa (bits 3-0 after complement)
+        mantissa = complemented & 0x0F
+        
+        # Calculate PCM value using ITU-T G.711 formula
+        # PCM = sign * (((mantissa << 1) + 33) << exponent) - 33)
+        pcm = (((mantissa << 1) + 33) << exponent) - 33
+        
+        # Apply sign (after complement, sign_bit 1 means negative)
+        if sign_bit == 1:
+            pcm = -pcm
+        
+        # Clip to int16 range
+        pcm = max(-32768, min(32767, pcm))
+        
+        table[i] = np.int16(pcm)
+    
+    _ULAW_TO_PCM_TABLE = table
+    return table
 
 def ulaw_to_pcm16(ulaw_audio: bytes) -> bytes:
-    """Convert μ-law audio to 16-bit PCM"""
+    """Convert μ-law audio to 16-bit PCM using ITU-T G.711 lookup table"""
+    # Build lookup table if not already built
+    table = _build_ulaw_table()
+    
     # Convert bytes to numpy array of uint8
     ulaw_array = np.frombuffer(ulaw_audio, dtype=np.uint8)
     
-    # μ-law expansion table (simplified - full table would be better)
-    # μ-law formula: sign bit (bit 7), exponent (bits 6-4), mantissa (bits 3-0)
-    # For simplicity, we'll use a lookup table approach
-    # Convert to signed values first
-    sign = ((ulaw_array & 0x80) >> 7) * -1
-    exponent = (ulaw_array & 0x70) >> 4
-    mantissa = (ulaw_array & 0x0F) | 0x10
-    
-    # Calculate PCM value
-    pcm_values = sign * ((((mantissa << 1) + 33) << exponent) - 33)
-    
-    # Clip to int16 range
-    pcm_values = np.clip(pcm_values, -32768, 32767).astype(np.int16)
+    # Use lookup table to convert
+    pcm_values = table[ulaw_array]
     
     return pcm_values.tobytes()
 
