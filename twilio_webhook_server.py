@@ -274,13 +274,13 @@ class TwilioOpenAIBridge:
                 "sequenceNumber": str(self.sequence_number)
             }
             # Log the message structure for debugging (first few messages only)
-            if self.sequence_number <= 3:
-             #   print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
-              #  print(f"  - streamSid: {stream_id}", flush=True)
-              #  print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
-              #  print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
-              #  print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
-              #  print(f"  - message JSON (first 200 chars): {json.dumps(message)[:200]}", flush=True)
+            # if self.sequence_number <= 3:
+            #     print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
+            #     print(f"  - streamSid: {stream_id}", flush=True)
+            #     print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
+            #     print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
+            #     print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
+            #     print(f"  - message JSON (first 200 chars): {json.dumps(message)[:200]}", flush=True)
             
             await self.twilio_ws.send(json.dumps(message))
             print(f"[{self.call_sid}] ✓ Sent {len(ulaw_audio)} bytes of audio to Twilio (seq: {self.sequence_number})", flush=True)
