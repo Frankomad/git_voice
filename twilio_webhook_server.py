@@ -276,14 +276,25 @@ class TwilioOpenAIBridge:
         if not self.openai_ws:
             return
         
+        openai_message_count = 0
         try:
+            print(f"[{self.call_sid}] Starting OpenAI message handler...", flush=True)
             async for message in self.openai_ws:
                 if not self.is_running:
                     break
                 
+                openai_message_count += 1
+                # Log all messages for debugging
+                if openai_message_count <= 10 or openai_message_count % 10 == 0:
+                    print(f"[{self.call_sid}] Received message #{openai_message_count} from OpenAI", flush=True)
+                
                 try:
                     data = json.loads(message)
                     event_type = data.get("type")
+                    
+                    # Log all event types for debugging (first 20 messages)
+                    if openai_message_count <= 20:
+                        print(f"[{self.call_sid}] OpenAI event: {event_type}", flush=True)
                     
                     if event_type == "session.created":
                         print(f"[{self.call_sid}] Session created!", flush=True)
@@ -342,16 +353,32 @@ class TwilioOpenAIBridge:
                     elif event_type == "error":
                         error = data.get("error", {})
                         print(f"[{self.call_sid}] OpenAI Error: {error.get('message', 'Unknown error')}")
+                        print(f"[{self.call_sid}] Error details: {json.dumps(error, indent=2)}", flush=True)
+                    
+                    else:
+                        # Log unhandled events for debugging
+                        if openai_message_count <= 20:
+                            print(f"[{self.call_sid}] Unhandled OpenAI event: {event_type}", flush=True)
+                            if event_type not in ["response.audio_transcript.delta", "response.audio.delta"]:
+                                print(f"[{self.call_sid}] Event data: {json.dumps(data, indent=2)}", flush=True)
                         
                 except json.JSONDecodeError:
-                    print(f"[{self.call_sid}] Received non-JSON message from OpenAI")
+                    print(f"[{self.call_sid}] Received non-JSON message from OpenAI: {message[:200]}", flush=True)
                 except Exception as e:
-                    print(f"[{self.call_sid}] Error processing OpenAI message: {e}")
+                    print(f"[{self.call_sid}] Error processing OpenAI message: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
                     
         except websockets.exceptions.ConnectionClosed:
-            print(f"[{self.call_sid}] OpenAI connection closed")
+            print(f"[{self.call_sid}] OpenAI connection closed", flush=True)
+            import traceback
+            traceback.print_exc()
         except Exception as e:
-            print(f"[{self.call_sid}] Error handling OpenAI messages: {e}")
+            print(f"[{self.call_sid}] Error handling OpenAI messages: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+        finally:
+            print(f"[{self.call_sid}] OpenAI message handler finished. Total messages: {openai_message_count}", flush=True)
     
     async def handle_twilio_messages(self):
         """Handle messages from Twilio Media Stream"""
