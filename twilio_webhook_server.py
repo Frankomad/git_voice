@@ -168,28 +168,47 @@ class TwilioOpenAIBridge:
         
     async def connect_to_openai(self):
         """Connect to OpenAI Realtime API"""
+        print(f"[{self.call_sid}] Checking OPENAI_API_KEY...", flush=True)
         if not OPENAI_API_KEY:
+            print(f"[{self.call_sid}] ERROR: OPENAI_API_KEY is not set!", flush=True)
             raise ValueError("OPENAI_API_KEY not set")
+        
+        api_key_prefix = OPENAI_API_KEY[:8] if len(OPENAI_API_KEY) > 8 else "***"
+        print(f"[{self.call_sid}] OPENAI_API_KEY is set (prefix: {api_key_prefix}...)", flush=True)
         
         headers = [
             ("Authorization", f"Bearer {OPENAI_API_KEY}"),
             ("OpenAI-Beta", "realtime=v1")
         ]
         
-        print(f"[{self.call_sid}] Connecting to OpenAI Realtime API...")
-        self.openai_ws = await websockets.connect(
-            REALTIME_API_URL,
-            additional_headers=headers,
-            ping_interval=20,
-            ping_timeout=10,
-            close_timeout=10
-        )
-        print(f"[{self.call_sid}] Connected to OpenAI!")
+        print(f"[{self.call_sid}] Connecting to OpenAI Realtime API at {REALTIME_API_URL}...", flush=True)
+        try:
+            self.openai_ws = await websockets.connect(
+                REALTIME_API_URL,
+                additional_headers=headers,
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=10
+            )
+            print(f"[{self.call_sid}] Connected to OpenAI! WebSocket: {self.openai_ws}", flush=True)
+        except Exception as e:
+            print(f"[{self.call_sid}] ERROR connecting to OpenAI: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Initialize assistant
-        self.assistant = RealtimeAssistant(OPENAI_API_KEY)
-        self.assistant.websocket = self.openai_ws
-        self.assistant.is_running = True
+        print(f"[{self.call_sid}] Initializing RealtimeAssistant...", flush=True)
+        try:
+            self.assistant = RealtimeAssistant(OPENAI_API_KEY)
+            self.assistant.websocket = self.openai_ws
+            self.assistant.is_running = True
+            print(f"[{self.call_sid}] RealtimeAssistant initialized successfully", flush=True)
+        except Exception as e:
+            print(f"[{self.call_sid}] ERROR initializing RealtimeAssistant: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
         
     async def configure_session(self):
         """Configure OpenAI session - will be done in handle_openai_messages"""
@@ -256,12 +275,12 @@ class TwilioOpenAIBridge:
             }
             # Log the message structure for debugging (first few messages only)
             if self.sequence_number <= 3:
-                print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
-                print(f"  - streamSid: {stream_id}", flush=True)
-                print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
-                print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
-                print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
-                print(f"  - message JSON (first 200 chars): {json.dumps(message)[:200]}", flush=True)
+             #   print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
+              #  print(f"  - streamSid: {stream_id}", flush=True)
+              #  print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
+              #  print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
+              #  print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
+              #  print(f"  - message JSON (first 200 chars): {json.dumps(message)[:200]}", flush=True)
             
             await self.twilio_ws.send(json.dumps(message))
             print(f"[{self.call_sid}] ✓ Sent {len(ulaw_audio)} bytes of audio to Twilio (seq: {self.sequence_number})", flush=True)
@@ -411,7 +430,6 @@ class TwilioOpenAIBridge:
                         payload = media.get("payload", "")
                         track = media.get("track", "inbound")  # Usually "inbound" for user's voice
                         
-                        print(f"[{self.call_sid}] Received media event - track: {track}, payload length: {len(payload) if payload else 0}", flush=True)
                         
                         if payload:
                             try:
@@ -472,22 +490,41 @@ class TwilioOpenAIBridge:
     async def run(self):
         """Run the bridge"""
         try:
-            print(f"[{self.call_sid}] Starting bridge...")
+            print(f"[{self.call_sid}] Starting bridge...", flush=True)
             self.is_running = True
             
             # Connect to OpenAI
-            await self.connect_to_openai()
+            try:
+                print(f"[{self.call_sid}] Attempting to connect to OpenAI...", flush=True)
+                await self.connect_to_openai()
+                print(f"[{self.call_sid}] OpenAI connection established successfully!", flush=True)
+            except Exception as e:
+                print(f"[{self.call_sid}] ERROR: Failed to connect to OpenAI: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                raise
             
             # Run both message handlers concurrently
             # Session configuration will happen automatically in handle_openai_messages
-            await asyncio.gather(
+            print(f"[{self.call_sid}] Starting message handlers...", flush=True)
+            results = await asyncio.gather(
                 self.handle_twilio_messages(),
                 self.handle_openai_messages(),
                 return_exceptions=True
             )
             
+            # Log any exceptions from handlers
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    handler_name = ["Twilio", "OpenAI"][i]
+                    print(f"[{self.call_sid}] ERROR in {handler_name} handler: {result}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+            
         except Exception as e:
-            print(f"[{self.call_sid}] Bridge error: {e}")
+            print(f"[{self.call_sid}] Bridge error: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
         finally:
             await self.cleanup()
     
@@ -583,131 +620,137 @@ def media_websocket(ws):
         
         # Wrap flask-sock's WebSocket to work with our async bridge
         # Convert synchronous ws to async-compatible
-        async def handle_async():
-            nonlocal call_sid
-            call_sid = f"call_{id(ws)}"
-            print(f"[{call_sid}] Media stream WebSocket connected", flush=True)
-            
-            # Create a wrapper to make flask-sock WebSocket work with async bridge
-            class FlaskSockWrapper:
-                def __init__(self, flask_ws, event_loop):
-                    self.flask_ws = flask_ws
-                    self.closed = False
-                    self._recv_queue = asyncio.Queue()
-                    self._loop = event_loop
-                    self._recv_lock = asyncio.Lock()
-                    
-                    # Start thread to continuously read from flask-sock and put in queue
-                    import threading
-                    def reader_thread():
-                        while not self.closed:
-                            try:
-                                # This blocks until data is available
-                                try:
-                                    data = self.flask_ws.receive()
-                                    if data:
-                                        # Put in queue using the event loop
-                                        try:
-                                            future = asyncio.run_coroutine_threadsafe(
-                                                self._recv_queue.put(data),
-                                                self._loop
-                                            )
-                                            future.result(timeout=1.0)  # Wait for it to be queued
-                                        except Exception as e:
-                                            print(f"[{call_sid}] Error queuing data: {e}", flush=True)
-                                except Exception as e:
-                                    if not self.closed:
-                                        # Check if it's a timeout or connection error
-                                        error_str = str(e).lower()
-                                        if "timeout" not in error_str and "closed" not in error_str:
-                                            print(f"[{call_sid}] Error receiving from flask-sock: {e}", flush=True)
-                                    self.closed = True
-                                    break
-                            except Exception as e:
-                                if not self.closed:
-                                    print(f"[{call_sid}] Error in reader thread: {e}", flush=True)
-                                self.closed = True
-                                break
-                    
-                    self.reader_thread = threading.Thread(target=reader_thread, daemon=True)
-                    self.reader_thread.start()
-                
-                def __aiter__(self):
-                    return self
-                
-                async def __anext__(self):
-                    if self.closed:
-                        raise StopAsyncIteration
-                    try:
-                        # Get data from queue - this will wait until data is available
-                        while not self.closed:
-                            try:
-                                # Wait for data (with timeout to check if closed)
-                                data = await asyncio.wait_for(self._recv_queue.get(), timeout=1.0)
-                                if isinstance(data, str):
-                                    return data
-                                if data is not None:
-                                    return json.dumps(data) if not isinstance(data, str) else data
-                            except asyncio.TimeoutError:
-                                # Continue waiting if not closed
-                                if self.closed:
-                                    raise StopAsyncIteration
-                                continue
-                    except StopAsyncIteration:
-                        raise
-                    except Exception as e:
-                        if self.closed:
-                            raise StopAsyncIteration
-                        # If there's an error but not closed, try to continue
-                        print(f"[{call_sid}] Error in __anext__: {e}", flush=True)
-                        raise StopAsyncIteration
-                    
-                    raise StopAsyncIteration
-                
-                async def recv(self):
-                    try:
-                        data = await self._recv_queue.get()
-                        if isinstance(data, str):
-                            return data
-                        return json.dumps(data) if data else None
-                    except Exception as e:
-                        self.closed = True
-                        raise websockets.exceptions.ConnectionClosed(None, None)
-                
-                async def send(self, data):
-                    try:
-                        if isinstance(data, str):
-                            self.flask_ws.send(data)
-                        else:
-                            self.flask_ws.send(json.dumps(data))
-                    except Exception as e:
-                        self.closed = True
-                        raise websockets.exceptions.ConnectionClosed(None, None)
-                
-                async def close(self):
-                    self.closed = True
-                    try:
-                        self.flask_ws.close()
-                    except:
-                        pass
-            
-            # Get the current event loop
+        call_sid = f"call_{id(ws)}"
+        print(f"[{call_sid}] Media stream WebSocket connected", flush=True)
+        
+        # Create event loop for this greenlet (eventlet monkey-patches asyncio)
+        try:
             loop = asyncio.get_event_loop()
             if loop.is_closed():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # Create a wrapper to make flask-sock WebSocket work with async bridge
+        class FlaskSockWrapper:
+            def __init__(self, flask_ws, event_loop):
+                self.flask_ws = flask_ws
+                self.closed = False
+                self._recv_queue = asyncio.Queue()
+                self._loop = event_loop
+                self._recv_lock = asyncio.Lock()
+                
+                # Start thread to continuously read from flask-sock and put in queue
+                import threading
+                def reader_thread():
+                    while not self.closed:
+                        try:
+                            # This blocks until data is available
+                            try:
+                                data = self.flask_ws.receive()
+                                if data:
+                                    # Put in queue using the event loop
+                                    try:
+                                        future = asyncio.run_coroutine_threadsafe(
+                                            self._recv_queue.put(data),
+                                            self._loop
+                                        )
+                                        future.result(timeout=1.0)  # Wait for it to be queued
+                                    except Exception as e:
+                                        print(f"[{call_sid}] Error queuing data: {e}", flush=True)
+                            except Exception as e:
+                                if not self.closed:
+                                    # Check if it's a timeout or connection error
+                                    error_str = str(e).lower()
+                                    if "timeout" not in error_str and "closed" not in error_str:
+                                        print(f"[{call_sid}] Error receiving from flask-sock: {e}", flush=True)
+                                self.closed = True
+                                break
+                        except Exception as e:
+                            if not self.closed:
+                                print(f"[{call_sid}] Error in reader thread: {e}", flush=True)
+                            self.closed = True
+                            break
+                
+                self.reader_thread = threading.Thread(target=reader_thread, daemon=True)
+                self.reader_thread.start()
             
+            def __aiter__(self):
+                return self
+            
+            async def __anext__(self):
+                if self.closed:
+                    raise StopAsyncIteration
+                try:
+                    # Get data from queue - this will wait until data is available
+                    while not self.closed:
+                        try:
+                            # Wait for data (with timeout to check if closed)
+                            data = await asyncio.wait_for(self._recv_queue.get(), timeout=1.0)
+                            if isinstance(data, str):
+                                return data
+                            if data is not None:
+                                return json.dumps(data) if not isinstance(data, str) else data
+                        except asyncio.TimeoutError:
+                            # Continue waiting if not closed
+                            if self.closed:
+                                raise StopAsyncIteration
+                            continue
+                except StopAsyncIteration:
+                    raise
+                except Exception as e:
+                    if self.closed:
+                        raise StopAsyncIteration
+                    # If there's an error but not closed, try to continue
+                    print(f"[{call_sid}] Error in __anext__: {e}", flush=True)
+                    raise StopAsyncIteration
+                
+                raise StopAsyncIteration
+            
+            async def recv(self):
+                try:
+                    data = await self._recv_queue.get()
+                    if isinstance(data, str):
+                        return data
+                    return json.dumps(data) if data else None
+                except Exception as e:
+                    self.closed = True
+                    raise websockets.exceptions.ConnectionClosed(None, None)
+            
+            async def send(self, data):
+                try:
+                    if isinstance(data, str):
+                        self.flask_ws.send(data)
+                    else:
+                        self.flask_ws.send(json.dumps(data))
+                except Exception as e:
+                    self.closed = True
+                    raise websockets.exceptions.ConnectionClosed(None, None)
+            
+            async def close(self):
+                self.closed = True
+                try:
+                    self.flask_ws.close()
+                except:
+                    pass
+        
+        async def handle_async():
             wrapped_ws = FlaskSockWrapper(ws, loop)
             bridge = TwilioOpenAIBridge(wrapped_ws, call_sid)
             await bridge.run()
         
-        # Run the async handler
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Run async handler with the event loop
         try:
             loop.run_until_complete(handle_async())
         finally:
-            loop.close()
+            # Clean up the loop
+            try:
+                if not loop.is_closed():
+                    loop.close()
+            except:
+                pass
         
     except Exception as e:
         print(f"[{call_sid}] WebSocket error: {e}")
