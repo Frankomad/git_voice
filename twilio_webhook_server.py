@@ -308,22 +308,44 @@ class TwilioOpenAIBridge:
             # Convert to JSON for sending
             message_json = json.dumps(message)
             
+            # Validate ulaw audio format (should be 8-bit values 0-255)
+            ulaw_array = np.frombuffer(ulaw_audio, dtype=np.uint8)
+            
             # Log detailed message structure for debugging (first few and periodically)
             if self.sequence_number <= 5 or self.sequence_number % 50 == 0:
-                print(f"[{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
-                print(f"  - streamSid: {stream_id}", flush=True)
-                print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
-                print(f"  - timestamp: {current_timestamp}", flush=True)
-                print(f"  - track: {message['media'].get('track', 'MISSING!')}", flush=True)
-                print(f"  - payload length: {len(audio_b64)} chars (base64)", flush=True)
-                print(f"  - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
-                print(f"  - chunk duration: {chunk_duration_ms}ms", flush=True)
-                # Validate ulaw audio format (should be 8-bit values 0-255)
-                ulaw_array = np.frombuffer(ulaw_audio, dtype=np.uint8)
-                print(f"  - ulaw range: {ulaw_array.min()} to {ulaw_array.max()}", flush=True)
+                print(f"[DIAG] [{self.call_sid}] DEBUG: Sending media message to Twilio:", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - streamSid: {stream_id}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - sequenceNumber: {self.sequence_number}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - timestamp: {current_timestamp}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - track: {message['media'].get('track', 'MISSING!')}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - chunk: {message['media'].get('chunk', 'MISSING!')}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - payload length: {len(audio_b64)} chars (base64)", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - ulaw audio bytes: {len(ulaw_audio)}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - chunk duration: {chunk_duration_ms}ms", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - ulaw range: {ulaw_array.min()} to {ulaw_array.max()}", flush=True)
                 # Show actual message structure (first 3 only to avoid spam)
                 if self.sequence_number <= 3:
-                    print(f"[{self.call_sid}] Full message JSON: {message_json[:600]}", flush=True)
+                    print(f"[DIAG] [{self.call_sid}] Full message JSON: {message_json[:600]}", flush=True)
+            
+            # Validate message structure before sending
+            validation_errors = []
+            if not stream_id:
+                validation_errors.append("MISSING streamSid - Twilio may reject message")
+            if not audio_b64:
+                validation_errors.append("EMPTY payload - No audio data")
+            if len(ulaw_audio) == 0:
+                validation_errors.append("EMPTY μ-law audio - No audio bytes")
+            if ulaw_array.min() < 0 or ulaw_array.max() > 255:
+                validation_errors.append(f"INVALID μ-law range: {ulaw_array.min()}-{ulaw_array.max()} (should be 0-255)")
+            if 'track' not in message['media']:
+                validation_errors.append("MISSING track field - Required for bidirectional streams")
+            if 'chunk' not in message['media']:
+                validation_errors.append("MISSING chunk field - May cause Twilio to ignore message")
+            
+            if validation_errors:
+                print(f"[DIAG] [{self.call_sid}] ⚠️ VALIDATION ERRORS:", flush=True)
+                for error in validation_errors:
+                    print(f"[DIAG] [{self.call_sid}]   ❌ {error}", flush=True)
             
             # Send message to Twilio
             try:
@@ -334,25 +356,26 @@ class TwilioOpenAIBridge:
                 # Send to WebSocket
                 await self.twilio_ws.send(message_json)
                 
-                # Log successful send (reduced frequency after first few)
+                # Log successful send with validation status
                 if self.sequence_number <= 10 or self.sequence_number % 50 == 0:
-                    print(f"[{self.call_sid}] ✓ Sent {len(ulaw_audio)} bytes of audio to Twilio (seq: {self.sequence_number}, ts: {current_timestamp})", flush=True)
+                    status = "✓ VALID" if not validation_errors else "⚠️ SENT WITH WARNINGS"
+                    print(f"[DIAG] [{self.call_sid}] {status} - Sent {len(ulaw_audio)} bytes to Twilio (seq: {self.sequence_number}, ts: {current_timestamp})", flush=True)
                     
             except Exception as send_error:
-                print(f"[{self.call_sid}] ERROR sending WebSocket message: {send_error}", flush=True)
-                print(f"[{self.call_sid}] Error type: {type(send_error).__name__}", flush=True)
-                print(f"[{self.call_sid}] Message structure:", flush=True)
-                print(f"  - streamSid: {stream_id}", flush=True)
-                print(f"  - sequenceNumber: {self.sequence_number}", flush=True)
-                print(f"  - timestamp: {current_timestamp}", flush=True)
-                print(f"  - payload length: {len(audio_b64)}", flush=True)
-                print(f"[{self.call_sid}] Full message: {message_json[:500]}", flush=True)
+                print(f"[DIAG] [{self.call_sid}] ❌ ERROR sending WebSocket message: {send_error}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - Error type: {type(send_error).__name__}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - Message structure:", flush=True)
+                print(f"[DIAG] [{self.call_sid}]     - streamSid: {stream_id}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]     - sequenceNumber: {self.sequence_number}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]     - timestamp: {current_timestamp}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]     - payload length: {len(audio_b64)}", flush=True)
+                print(f"[DIAG] [{self.call_sid}]   - Full message: {message_json[:500]}", flush=True)
                 import traceback
                 traceback.print_exc()
                 raise
             
         except Exception as e:
-            print(f"[{self.call_sid}] Error sending audio to Twilio: {e}", flush=True)
+            print(f"[DIAG] [{self.call_sid}] ❌ Error sending audio to Twilio: {e}", flush=True)
             import traceback
             traceback.print_exc()
     
@@ -510,12 +533,13 @@ class TwilioOpenAIBridge:
                         
                         # Log incoming message structure for comparison (first few only)
                         if message_count <= 5:
-                            print(f"[{self.call_sid}] DEBUG: Received media FROM Twilio:", flush=True)
-                            print(f"  - streamSid: {data.get('streamSid', 'N/A')}", flush=True)
-                            print(f"  - sequenceNumber: {sequence}", flush=True)
-                            print(f"  - timestamp: {timestamp}", flush=True)
-                            print(f"  - track: {track}", flush=True)
-                            print(f"  - payload length: {len(payload) if payload else 0} chars (base64)", flush=True)
+                            print(f"[DIAG] [{self.call_sid}] DEBUG: Received media FROM Twilio:", flush=True)
+                            print(f"[DIAG] [{self.call_sid}]   - streamSid: {data.get('streamSid', 'N/A')}", flush=True)
+                            print(f"[DIAG] [{self.call_sid}]   - sequenceNumber: {sequence}", flush=True)
+                            print(f"[DIAG] [{self.call_sid}]   - timestamp: {timestamp}", flush=True)
+                            print(f"[DIAG] [{self.call_sid}]   - track: {track}", flush=True)
+                            print(f"[DIAG] [{self.call_sid}]   - chunk: {media.get('chunk', 'N/A')}", flush=True)
+                            print(f"[DIAG] [{self.call_sid}]   - payload length: {len(payload) if payload else 0} chars (base64)", flush=True)
                         
                         # Track timestamp for outgoing audio sync
                         if timestamp:
@@ -523,7 +547,7 @@ class TwilioOpenAIBridge:
                                 ts = int(timestamp)
                                 if self.timestamp_base is None:
                                     self.timestamp_base = ts
-                                    print(f"[{self.call_sid}] Set timestamp base: {ts}", flush=True)
+                                    print(f"[DIAG] [{self.call_sid}] Set timestamp base: {ts}", flush=True)
                                 self.last_timestamp = ts
                             except (ValueError, TypeError):
                                 pass
@@ -546,6 +570,8 @@ class TwilioOpenAIBridge:
                         start_data = data.get("start", {})
                         stream_sid = start_data.get("streamSid") or start_data.get("callSid")
                         call_sid_from_start = start_data.get("callSid")
+                        tracks = start_data.get("tracks", [])
+                        media_format = start_data.get("mediaFormat", {})
                         
                         if stream_sid:
                             self.stream_sid = stream_sid
@@ -555,7 +581,17 @@ class TwilioOpenAIBridge:
                             print(f"[{self.call_sid}] Updating call SID to: {call_sid_from_start}", flush=True)
                             self.call_sid = call_sid_from_start
                         
+                        # Check for common issues with stream configuration
                         print(f"[{self.call_sid}] Media stream started", flush=True)
+                        print(f"[DIAG] [{self.call_sid}] Stream configuration:", flush=True)
+                        print(f"[DIAG] [{self.call_sid}]   - Tracks: {tracks}", flush=True)
+                        print(f"[DIAG] [{self.call_sid}]   - Format: {media_format.get('encoding', 'N/A')} @ {media_format.get('sampleRate', 'N/A')}Hz", flush=True)
+                        
+                        # Check if bidirectional audio is enabled
+                        if "outbound" not in tracks and len(tracks) == 1 and tracks[0] == "inbound":
+                            print(f"[DIAG] [{self.call_sid}] ⚠️ WARNING: Stream only has 'inbound' track - outbound audio may not work!", flush=True)
+                            print(f"[DIAG] [{self.call_sid}]   This is normal for Twilio - outbound track is implicit for bidirectional streams", flush=True)
+                        
                         print(f"[{self.call_sid}] Start event data: {json.dumps(data, indent=2)}", flush=True)
                     
                     elif event_type == "stop":
